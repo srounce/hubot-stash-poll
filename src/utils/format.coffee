@@ -16,6 +16,7 @@ module.exports =
 
 
     list: (repos, roomName) ->
+      console.log(repos)
       if not repos? or repos.length is 0
         "#{roomName} is not subscribing to any PR changes"
       else
@@ -74,12 +75,18 @@ module.exports =
       "Declined: ##{prData.pr_id} (#{prData.pr_title}) #{prData.pr_url}"
 
 
-    toEmitFormat: ({id, url, title, api_url, reviewers}) ->
+    updated: (prData) ->
+      "Updated: #{prData.pr_lastAuthor.displayName} (@#{prData.pr_lastAuthor.name}) ##{prData.pr_id} (#{prData.pr_title}) #{prData.pr_url}"
+
+
+    toEmitFormat: ({id, url, title, api_url, reviewers, updatedDate, lastAuthor}) ->
       pr_id: id
       pr_url: url
       pr_title: title
       api_url: api_url
       pr_reviewers: reviewers
+      pr_updatedDate: updatedDate
+      pr_lastAuthor: lastAuthor
 
 
 

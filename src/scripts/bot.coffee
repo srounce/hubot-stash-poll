@@ -80,6 +80,7 @@ bot = (robot) ->
     repo = robot.brain.data['stash-poll']?[forApiUrl]
     return if not repo? or not repo.rooms?
 
+    console.log(repo)
     for roomHandle in repo.rooms
       robot.messageRoom(roomHandle, message)
 
@@ -96,10 +97,14 @@ bot = (robot) ->
     sendRoomMessages prData.api_url, format.pr.declined(prData)
 
 
+  utils.poller.events.on 'pr:updated', (prData) ->
+    sendRoomMessages prData.api_url, format.pr.updated(prData)
+
+
   utils.poller.events.on 'repo:failed', (repo) ->
     sendRoomMessages repo.api_url, format.repo.failed(repo)
 
-
+  robot.logger.debug "STARTING!!!"
   utils.poller.start()
 
 

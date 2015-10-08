@@ -18,6 +18,7 @@ class Poller
 
 
   start: ->
+    @robot.logger.debug "INTERVAL ID IS: #{@intervalId}"
     return if @intervalId?
 
     @intervalId = setInterval =>
@@ -27,6 +28,7 @@ class Poller
         @fetchRepositories()
 
     , @pollInterval
+    @fetchRepositories()
 
 
   stop: ->
@@ -38,8 +40,11 @@ class Poller
     if not @robot.brain.data['stash-poll']?
       return
 
+    @robot.logger.debug JSON.stringify @robot.brain.data['stash-poll']
+
     @events.emit 'poll:begin'
     promises = for api_url, repo of @robot.brain.data['stash-poll']
+      @robot.logger.debug JSON.stringify repo
       @fetchRepository repo
 
     Q.allSettled(promises).then (results) =>
@@ -79,6 +84,38 @@ class Poller
     deferred.promise
 
 
+  fetchCommit: (commit, repo) ->
+    deferred = Q.defer()
+
+    fail = (e) =>
+      @_handleRepoFailed(repo)
+      deferred.reject(e)
+
+    try
+      fetchUrl = @_buildFetchUrl(
+        repo.api_url.replace(/pull-.*/g, '') +
+        'commits/' + commit
+      )
+
+      @robot.http(fetchUrl)
+        .auth(config.username, config.password)
+        .get() (err, res, body) =>
+          if err?
+            fail(err)
+          else
+            json = try
+              JSON.parse body
+
+            values = json?.values
+
+            if pullRequests?
+              deferred.resolve(valid)
+    catch e
+      fail(e)
+
+    deferred.promise
+
+
   _handleRepoFailed: (repo) ->
     repo.failCount = 0 unless repo.failCount?
     repo.failCount += 1
@@ -102,42 +139,57 @@ class Poller
       existing = forRepo.pull_requests?[pr.id]
 
       # skip existing PR that has no state-change
-      continue if existing? and existing.state is pr.state
+      continue if existing? and existing.updatedDate is pr.updatedDate
 
       # skip unseen PR if it is merged or declined
       continue if not existing? and pr.state in ['MERGED', 'DECLINED']
 
-      prLinks = pr.links?.self?.filter (link) -> link.href?
-      pr_url = prLinks?[0]?.href
+      @robot.logger.debug(pr)
+      
+      @fetchCommit(pr.fromRef.latestChangeset, forRepo).then (lastCommit) =>
+        @robot.logger.debug(lastCommit.author)
+        @_upsertPullrequest pullRequest, lastCommit, forRepo
 
-      pr_reviewers = pr.reviewers?.map (reviewer) -> reviewer.user.name
-        
-      eventName = switch pr.state.toLowerCase()
-        when 'open'     then 'pr:open'
-        when 'merged'   then 'pr:merge'
-        when 'declined' then 'pr:decline'
-        else
-          @robot.logger.warning "Unrecognized PR-state: #{pr.state}"
-          "pr:#{pr.state.toLowerCase()}"
+  _upsertPullrequest: (pullRequest, lastCommit, forRepo) ->
+    prLinks = pr.links?.self?.filter (link) -> link.href?
+    pr_url = prLinks?[0]?.href
 
-      # update/insert PR state
-      forRepo.pull_requests ||= {}
+    pr_reviewers = pr.reviewers?.map (reviewer) -> reviewer.user.name
 
-      if not forRepo.pull_requests[pr.id]?
-        forRepo.pull_requests[pr.id] =
-          id: pr.id
-          title: pr.title
-          url: pr_url
-          reviewers: pr_reviewers
+    existing_updatedDate = existing.updatedDate || 0
+    pr_state = existing_updatedDate < pr.updatedDate then 'updated' else pr.state
+      
+    eventName = switch pr_state.toLowerCase()
+      when 'open'     then 'pr:open'
+      when 'merged'   then 'pr:merge'
+      when 'declined' then 'pr:decline'
+      when 'updated' then 'pr:update'
+      else
+        @robot.logger.warning "Unrecognized PR-state: #{pr.state}"
+        "pr:#{pr.state.toLowerCase()}"
 
-      forRepo.pull_requests[pr.id].state = pr.state
+    # update/insert PR state
+    forRepo.pull_requests ||= {}
 
-      @events.emit eventName, format.pr.toEmitFormat
+    if not forRepo.pull_requests[pr.id]?
+      forRepo.pull_requests[pr.id] =
         id: pr.id
-        url: pr_url
         title: pr.title
+        url: pr_url
         reviewers: pr_reviewers
-        api_url: forRepo.api_url
+        updatedDate: pr.updatedDate
+        lastAuthor: lastCommit.author
+
+    forRepo.pull_requests[pr.id].state = pr.state
+
+    @events.emit eventName, format.pr.toEmitFormat
+      id: pr.id
+      url: pr_url
+      title: pr.title
+      reviewers: pr_reviewers
+      api_url: forRepo.api_url
+      updatedDate: pr.updatedDate
+      lastAuthor: lastCommit.author
 
 
 
